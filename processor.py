@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import subprocess
 import requests
 
@@ -204,6 +205,8 @@ def search_pexels_video(query):
     if not videos:
         return None
 
+    random.shuffle(videos)  # fresh clip every render
+
     for video in videos:
         for vf in sorted(video.get("video_files", []),
                          key=lambda x: x.get("height", 0), reverse=True):
@@ -399,14 +402,16 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
 
     n = len(broll_paths)
     part_dur = duration / n
+    total_frames = round(duration * 30)
     bottom_parts = []
     for i, clip in enumerate(broll_paths):
         part_out = f"{work}/bottom_{i}.mp4"
         run_ffmpeg(
             "-stream_loop", "-1", "-i", clip,
-            "-t", str(part_dur),
-            "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
+            "-vf", f"setpts=PTS-STARTPTS,"
+                   f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
             "-r", "30",
+            "-frames:v", str(round(part_dur * 30)),
             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             part_out, error_label=f"bottom part {i}"
         )
@@ -422,16 +427,21 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         bottom_track = f"{work}/bottom_track.mp4"
         run_ffmpeg(
             "-f", "concat", "-safe", "0", "-i", concat_txt,
-            "-c:v", "copy",
+            "-vf", "setpts=PTS-STARTPTS",
+            "-r", "30",
+            "-frames:v", str(total_frames),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             bottom_track, error_label="bottom concat"
         )
 
     top_track = f"{work}/top_track.mp4"
     run_ffmpeg(
         "-i", video_path,
-        "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
+        "-vf", f"setpts=PTS-STARTPTS,"
+               f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
                f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
         "-r", "30",
+        "-frames:v", str(total_frames),
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         top_track, error_label="top track"
     )
