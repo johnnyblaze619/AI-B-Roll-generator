@@ -1,5 +1,6 @@
 import os
 import uuid
+import time
 import threading
 import json
 from flask import Flask, render_template, request, jsonify, send_file
@@ -10,7 +11,7 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB upload limit
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("jobs", exist_ok=True)
 
-jobs = {}  # job_id -> {progress, message, status, output}
+jobs = {}  # job_id -> {progress, message, status, output, mode, created_at}
 
 
 def _env_api_key() -> str:
@@ -44,6 +45,8 @@ def process():
         "status": "running",
         "output": None,
         "edit_plan": None,
+        "mode": mode,
+        "created_at": time.time(),
     }
 
     def run():
@@ -82,6 +85,21 @@ def status(job_id):
                 job["edit_plan"] = json.load(f)
 
     return jsonify(job)
+
+
+@app.route("/history")
+def history():
+    completed = [
+        {
+            "job_id": jid,
+            "mode": j.get("mode", "mix"),
+            "created_at": j.get("created_at", 0),
+        }
+        for jid, j in jobs.items()
+        if j.get("status") == "done"
+    ]
+    completed.sort(key=lambda x: x["created_at"], reverse=True)
+    return jsonify({"jobs": completed})
 
 
 @app.route("/download/<job_id>")
