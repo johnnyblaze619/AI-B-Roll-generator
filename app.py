@@ -14,7 +14,6 @@ jobs = {}  # job_id -> {progress, message, status, output}
 
 
 def _env_api_key() -> str:
-    """Return the Anthropic API key from the environment (standard key or managed session token)."""
     if k := os.environ.get("ANTHROPIC_API_KEY"):
         return k
     tf = os.environ.get("CLAUDE_SESSION_INGRESS_TOKEN_FILE", "")
@@ -46,7 +45,7 @@ def process():
 
     jobs[job_id] = {
         "progress": 0,
-        "message": "Queued…",
+        "message": "Queued",
         "status": "running",
         "output": None,
         "edit_plan": None,
@@ -77,7 +76,6 @@ def status(job_id):
     if not job:
         return jsonify({"status": "not_found"}), 404
 
-    # Attach edit plan from disk if available and not yet in memory
     if job.get("edit_plan") is None:
         plan_path = f"jobs/{job_id}/edit_plan.json"
         if os.path.exists(plan_path):

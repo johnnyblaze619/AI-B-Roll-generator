@@ -1,20 +1,16 @@
----
-title: B-Roll Editor
-emoji: 🎬
-colorFrom: purple
-colorTo: pink
-sdk: docker
-pinned: false
----
-
 # B-Roll Editor
 
-Upload a talking-head MP4 → get a polished edit with b-roll cutaways, automatically.
+Upload a talking-head MP4 and get a polished edit with automatic b-roll cutaways.
 
-**How it works:**
+## How it works
 1. Whisper transcribes your audio with accurate timestamps
-2. Claude (Anthropic) reads the transcript and plans which moments get b-roll vs face cam
-3. Pexels provides free portrait 9:16 stock clips for each b-roll segment
-4. ffmpeg composites the final video — your original audio runs throughout
+2. Claude (Anthropic) plans which moments get face cam vs b-roll
+3. Pexels provides free portrait 9:16 stock clips
+4. ffmpeg composites the final video with your original audio throughout
 
-**You need:** An [Anthropic API key](https://console.anthropic.com)
+## Setup
+```bash
+pip install -r requirements.txt
+python app.py
+```
+Open http://localhost:5000 and enter your Anthropic API key.
