@@ -363,7 +363,7 @@ def process_video(video_path, job_id, api_key, progress_cb):
 
 
 def process_video_split_screen(video_path, job_id, api_key, progress_cb):
-    """Split Screen mode: face cam on top half, b-roll looping on bottom half."""
+    """Split Screen mode: face cam fills top half, per-sentence b-roll on bottom half."""
     work = f"jobs/{job_id}"
     os.makedirs(work, exist_ok=True)
 
@@ -371,6 +371,7 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
     width, height, duration = get_video_info(video_path)
     width, height = _cap_resolution(width, height)
     h2 = height // 2
+    total_frames = round(duration * 30)
 
     progress_cb(8, "Extracting audio…")
     audio_path = f"{work}/audio.mp3"
@@ -379,76 +380,87 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
     progress_cb(15, "Transcribing with Groq Whisper…")
     transcript = transcribe_audio(audio_path, api_key, duration)
 
-    progress_cb(35, "Selecting b-roll themes…")
-    keywords = get_broll_keywords(transcript, api_key)
+    # One b-roll clip per sentence — same approach as mix edit
+    sentences = _sentences_in_range(transcript, 0, duration)
+    if not sentences:
+        sentences = [{"start": 0.0, "end": duration, "text": ""}]
 
+    display_kws = [s["text"][:40] for s in sentences[:5]]
     with open(f"{work}/edit_plan.json", "w") as _f:
-        json.dump([{"type": "split_screen", "keywords": keywords}], _f)
+        json.dump([{"type": "split_screen", "keywords": display_kws}], _f)
 
-    broll_paths = []
-    for idx, kw in enumerate(keywords[:3]):
-        pct = 45 + idx * 10
-        progress_cb(pct, f'Downloading b-roll: "{kw}"…')
-        url = search_pexels_video(kw)
+    total_sent = sum(s["end"] - s["start"] for s in sentences)
+    sent_clips = []
+    n_sent = len(sentences)
+
+    for j, sent in enumerate(sentences):
+        pct = 35 + int((j / n_sent) * 45)
+        raw = sent["end"] - sent["start"]
+        clip_dur = max(raw * duration / total_sent, 1.0) if total_sent > 0 else max(duration / n_sent, 1.0)
+        query = sent["text"].strip()
+        sc_out = f"{work}/bsc_{j}.mp4"
+
+        url = None
+        if query:
+            progress_cb(pct, f'B-roll: "{query[:50]}"…')
+            url = search_pexels_video(query)
+            if not url and len(query.split()) > 3:
+                url = search_pexels_video(" ".join(query.split()[:4]))
+
         if url:
-            clip = f"{work}/broll_{idx}.mp4"
-            download_video(url, clip)
-            broll_paths.append(clip)
+            tmp = f"{work}/btmp_{j}.mp4"
+            download_video(url, tmp)
+            cut_broll(tmp, clip_dur, sc_out, width, h2)
+            os.remove(tmp)
+        else:
+            # Fallback: use original video cropped to fill bottom half
+            run_ffmpeg(
+                "-ss", str(sent["start"]), "-i", video_path,
+                "-vf", f"setpts=PTS-STARTPTS,"
+                       f"scale={width}:{h2}:force_original_aspect_ratio=increase,"
+                       f"crop={width}:{h2}",
+                "-r", "30",
+                "-frames:v", str(round(clip_dur * 30)),
+                "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                sc_out, error_label=f"fallback bottom {j}"
+            )
 
-    if not broll_paths:
-        broll_paths = [video_path]
+        sent_clips.append(sc_out)
 
-    progress_cb(75, "Building split-screen…")
+    progress_cb(82, "Building split-screen…")
 
-    n = len(broll_paths)
-    part_dur = duration / n
-    total_frames = round(duration * 30)
-    bottom_parts = []
-    for i, clip in enumerate(broll_paths):
-        part_out = f"{work}/bottom_{i}.mp4"
-        run_ffmpeg(
-            "-stream_loop", "-1", "-i", clip,
-            "-vf", f"setpts=PTS-STARTPTS,"
-                   f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
-            "-r", "30",
-            "-frames:v", str(round(part_dur * 30)),
-            "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-            part_out, error_label=f"bottom part {i}"
-        )
-        bottom_parts.append(part_out)
-
-    if len(bottom_parts) == 1:
-        bottom_track = bottom_parts[0]
+    if len(sent_clips) == 1:
+        bottom_track = sent_clips[0]
     else:
-        concat_txt = f"{work}/bottom_concat.txt"
-        with open(concat_txt, "w") as f:
-            for p in bottom_parts:
-                f.write(f"file '{os.path.abspath(p)}'\n")
+        cat_txt = f"{work}/bottom_concat.txt"
+        with open(cat_txt, "w") as f:
+            for sc in sent_clips:
+                f.write(f"file '{os.path.abspath(sc)}'\n")
         bottom_track = f"{work}/bottom_track.mp4"
         run_ffmpeg(
-            "-f", "concat", "-safe", "0", "-i", concat_txt,
+            "-f", "concat", "-safe", "0", "-i", cat_txt,
             "-vf", "setpts=PTS-STARTPTS",
             "-r", "30",
             "-frames:v", str(total_frames),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             bottom_track, error_label="bottom concat"
         )
+        for sc in sent_clips:
+            if os.path.exists(sc):
+                os.remove(sc)
 
+    # Top: crop to fill entire width — face stays visible, sides may be cropped
     top_track = f"{work}/top_track.mp4"
     run_ffmpeg(
         "-i", video_path,
         "-vf", f"setpts=PTS-STARTPTS,"
-               f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
-               f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
+               f"scale={width}:{h2}:force_original_aspect_ratio=increase,"
+               f"crop={width}:{h2}",
         "-r", "30",
         "-frames:v", str(total_frames),
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         top_track, error_label="top track"
     )
-
-    for clip in broll_paths:
-        if clip != video_path and os.path.exists(clip):
-            os.remove(clip)
 
     progress_cb(92, "Compositing final video…")
     output = f"{work}/output.mp4"
