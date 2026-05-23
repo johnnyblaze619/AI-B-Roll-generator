@@ -124,23 +124,33 @@ def analyze_segments(transcript, duration, api_key):
         for s in transcript
     )
 
-    n_broll = 6 if duration >= 90 else 5
+    n_broll = 4 if duration >= 120 else 3
 
     prompt = (
-        "You are a professional video editor.\n\n"
+        "You are a professional video editor creating a beautiful, balanced short-form edit.\n\n"
         f"TRANSCRIPT ({duration:.0f}s):\n{lines}\n\n"
-        f"Plan exactly {n_broll} b-roll segments with this rhythm:\n"
-        "  • HOOK: face_cam 6-9s\n"
-        f"  • Repeat {n_broll}x: broll (8-13s) → face_cam (3-5s)\n"
-        "  • CTA: face_cam 5-8s\n\n"
-        "Return ONLY valid JSON — no keywords needed, just type and timing:\n"
+        f"Create exactly {n_broll} b-roll segments using this EXACT rhythm:\n"
+        "  1. face_cam — HOOK: cover the first 1-2 sentences (6-10s)\n"
+        f"  2. Alternate {n_broll} times: broll (12-20s) then face_cam (4-6s)\n"
+        "  3. The LAST face_cam is the CTA: cover the final 1-2 sentences (6-10s)\n\n"
+        f"EXAMPLE for a {duration:.0f}s video with {n_broll} b-roll segments:\n"
+        "  0-8s    face_cam  ← hook, first sentence\n"
+        "  8-25s   broll     ← 17s of b-roll\n"
+        "  25-30s  face_cam  ← 5s cutback\n"
+        "  30-47s  broll     ← 17s of b-roll\n"
+        "  47-52s  face_cam  ← 5s cutback\n"
+        "  52-69s  broll     ← 17s of b-roll\n"
+        f"  69-{duration:.0f}s  face_cam  ← CTA, last sentence\n\n"
+        "Return ONLY valid JSON, no markdown, no keywords:\n"
         '[\n'
         '  {"start": 0.0, "end": 8.0, "type": "face_cam"},\n'
-        '  {"start": 8.0, "end": 20.0, "type": "broll"},\n'
+        '  {"start": 8.0, "end": 25.0, "type": "broll"},\n'
+        '  {"start": 25.0, "end": 30.0, "type": "face_cam"},\n'
         '  ...\n'
         f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
         "]\n"
-        f"Exactly {n_broll} broll entries. Last segment ends at {duration:.1f} and is face_cam."
+        f"RULES: exactly {n_broll} broll entries. "
+        f"First and last segments are face_cam. Last ends at {duration:.1f}."
     )
 
     text = _groq_llm(prompt, api_key)
@@ -207,6 +217,7 @@ def cut_face_cam(original, start, dur, out, w, h):
         "-t", str(dur),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
+        "-r", "30",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         out, error_label="face-cam cut"
     )
@@ -218,6 +229,7 @@ def cut_broll(broll_path, dur, out, w, h):
         "-t", str(dur),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                f"crop={w}:{h}",
+        "-r", "30",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         out, error_label="b-roll cut"
     )
