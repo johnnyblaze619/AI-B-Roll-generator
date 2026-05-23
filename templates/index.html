@@ -264,12 +264,12 @@
   <!-- API key -->
   {% if has_env_key %}
   <div class="field">
-    <span class="env-note">✓ Anthropic API key loaded from environment</span>
+    <span class="env-note">✓ Gemini API key loaded from environment</span>
   </div>
   {% else %}
   <div class="field">
-    <label for="api-key">Anthropic API Key</label>
-    <input type="password" id="api-key" placeholder="sk-ant-…" autocomplete="off" />
+    <label for="api-key">Gemini API Key</label>
+    <input type="password" id="api-key" placeholder="AIza…" autocomplete="off" />
   </div>
   {% endif %}
 
@@ -372,7 +372,7 @@ async function startJob() {
 
   const apiKey = apiKeyEl ? apiKeyEl.value.trim() : '';
   if (apiKeyEl && !apiKey) {
-    errorBox.textContent = 'Please enter your Anthropic API key.';
+    errorBox.textContent = 'Please enter your Gemini API key.';
     errorBox.style.display = 'block';
     return;
   }

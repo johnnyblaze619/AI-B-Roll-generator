@@ -14,14 +14,8 @@ jobs = {}  # job_id -> {progress, message, status, output}
 
 
 def _env_api_key() -> str:
-    """Return the Anthropic API key from the environment (standard key or managed session token)."""
-    if k := os.environ.get("ANTHROPIC_API_KEY"):
-        return k
-    tf = os.environ.get("CLAUDE_SESSION_INGRESS_TOKEN_FILE", "")
-    if tf and os.path.exists(tf):
-        with open(tf) as f:
-            return f.read().strip()
-    return ""
+    """Return the Gemini API key from the environment."""
+    return os.environ.get("GEMINI_API_KEY", "")
 
 
 @app.route("/")
@@ -38,7 +32,7 @@ def process():
 
     api_key = request.form.get("api_key") or _env_api_key()
     if not api_key:
-        return jsonify({"error": "Anthropic API key is required"}), 400
+        return jsonify({"error": "Gemini API key is required"}), 400
 
     job_id = str(uuid.uuid4())
     upload_path = f"uploads/{job_id}.mp4"
@@ -77,7 +71,6 @@ def status(job_id):
     if not job:
         return jsonify({"status": "not_found"}), 404
 
-    # Attach edit plan from disk if available and not yet in memory
     if job.get("edit_plan") is None:
         plan_path = f"jobs/{job_id}/edit_plan.json"
         if os.path.exists(plan_path):

@@ -11,11 +11,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-bake Whisper base model into the image so first run is instant
+# Pre-bake Whisper tiny model into the image so first run is instant
 ENV HF_HOME=/app/.cache
 RUN python3 -c "\
 from faster_whisper import WhisperModel; \
-m = WhisperModel('base', device='cpu', compute_type='int8'); \
+m = WhisperModel('tiny', device='cpu', compute_type='int8'); \
 print('Whisper model ready')"
 
 # Copy app
@@ -23,8 +23,7 @@ COPY . .
 
 RUN mkdir -p uploads jobs
 
-# Hugging Face Spaces serves on 7860
-ENV PORT=7860
-EXPOSE 7860
+ENV PORT=10000
+EXPOSE 10000
 
 CMD ["python", "app.py"]

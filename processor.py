@@ -2,19 +2,8 @@ import os
 import json
 import subprocess
 import requests
-import base64
-import anthropic
 
 PEXELS_API_KEY = "LppRQMMFSN0E7avfYQUoeQVdifahsxZwB0Uzag6Z7OQhZvemwAYfQ5eu"
-
-
-def _make_client(api_key: str) -> anthropic.Anthropic:
-    """Return an Anthropic client. Supports both regular API keys (sk-ant-api*)
-    and OAuth/session tokens (sk-ant-si* / sk-ant-oa*) used in managed envs."""
-    if api_key.startswith("sk-ant-api"):
-        return anthropic.Anthropic(api_key=api_key)
-    # OAuth bearer token (e.g. Claude Code managed environment)
-    return anthropic.Anthropic(auth_token=api_key)
 
 
 def run_ffmpeg(*args, error_label="ffmpeg"):
@@ -58,12 +47,12 @@ def extract_audio(video_path, audio_path):
 
 def transcribe_audio(audio_path, _api_key, duration):
     """Transcribe using OpenAI Whisper (open-source, no API key needed).
-    Whisper gives accurate word-level timestamps; Claude handles editorial analysis."""
+    Whisper gives accurate word-level timestamps; Gemini handles editorial analysis."""
     from faster_whisper import WhisperModel
     import os
 
     cache_dir = os.environ.get("HF_HOME", None)
-    model = WhisperModel("base", device="cpu", compute_type="int8",
+    model = WhisperModel("tiny", device="cpu", compute_type="int8",
                          download_root=cache_dir)
     segments_iter, _ = model.transcribe(
         audio_path,
@@ -72,7 +61,6 @@ def transcribe_audio(audio_path, _api_key, duration):
         vad_filter=True,
     )
 
-    # Group whisper word-level segments into sensible sentence chunks (3-20s)
     transcript = []
     chunk_start = None
     chunk_words = []
@@ -85,8 +73,7 @@ def transcribe_audio(audio_path, _api_key, duration):
                 chunk_start = w.start
             chunk_words.append(w.word)
             chunk_end = w.end
-            # Split on sentence-end punctuation or when chunk reaches ~15s
-            is_sentence_end = w.word.strip().endswith((".", "!", "?", ","))
+            is_sentence_end = w.word.strip().endswith(("." , "!", "?", ","))
             chunk_duration = chunk_end - chunk_start
             if is_sentence_end and chunk_duration >= 3.0 or chunk_duration >= 15.0:
                 transcript.append({
@@ -97,7 +84,6 @@ def transcribe_audio(audio_path, _api_key, duration):
                 chunk_start = None
                 chunk_words = []
 
-    # Flush remaining words
     if chunk_words and chunk_start is not None:
         transcript.append({
             "start": round(chunk_start, 2),
@@ -108,50 +94,44 @@ def transcribe_audio(audio_path, _api_key, duration):
         transcript[-1]["end"] = round(duration, 2)
 
     if not transcript:
-        # Fallback if audio was silent / too short
         transcript = [{"start": 0.0, "end": duration, "text": "(no speech detected)"}]
 
     return transcript
 
 
 def analyze_segments(transcript, duration, api_key):
-    client = _make_client(api_key)
+    import google.generativeai as genai
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
     lines = "\n".join(
         f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}"
         for s in transcript
     )
 
-    resp = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": (
-                "You are a professional video editor. Analyze this transcript and create an edit plan.\n\n"
-                f"TRANSCRIPT:\n{lines}\n\n"
-                "RULES:\n"
-                '1. face_cam: hooks (opening ~10s), CTAs, emotional/personal moments, direct address ("you", "I")\n'
-                "2. broll: describing products, places, concepts, tips, steps — anything visual\n"
-                "3. Minimum 3 seconds per segment\n"
-                "4. Aim for 40-60% b-roll coverage\n"
-                f"5. Segments must be contiguous, covering 0.0 to {duration:.1f}s exactly\n"
-                "6. For broll: 2-4 word Pexels keyword (concrete, visual, searchable)\n"
-                "7. First segment is almost always face_cam (the hook)\n"
-                "8. Last segment is often face_cam (the CTA)\n\n"
-                "Return ONLY a JSON array, no markdown:\n"
-                '[\n'
-                '  {"start": 0.0, "end": 9.0, "type": "face_cam"},\n'
-                '  {"start": 9.0, "end": 18.5, "type": "broll", "keyword": "morning coffee laptop"},\n'
-                '  {"start": 18.5, "end": 25.0, "type": "face_cam"},\n'
-                f'  {{"start": 25.0, "end": {duration:.1f}, "type": "face_cam"}}\n'
-                "]\n\n"
-                f"The last segment MUST end at exactly {duration:.1f}"
-            )
-        }]
+    prompt = (
+        "You are a professional video editor. Analyze this transcript and create an edit plan.\n\n"
+        f"TRANSCRIPT:\n{lines}\n\n"
+        "RULES:\n"
+        '1. face_cam: hooks (opening ~10s), CTAs, emotional/personal moments, direct address\n'
+        "2. broll: describing products, places, concepts, tips, steps — anything visual\n"
+        "3. Minimum 3 seconds per segment\n"
+        "4. Aim for 40-60% b-roll coverage\n"
+        f"5. Segments must be contiguous, covering 0.0 to {duration:.1f}s exactly\n"
+        "6. For broll: 2-4 word Pexels keyword (concrete, visual, searchable)\n"
+        "7. First segment is almost always face_cam (the hook)\n"
+        "8. Last segment is often face_cam (the CTA)\n\n"
+        "Return ONLY a JSON array, no markdown:\n"
+        '[\n'
+        '  {"start": 0.0, "end": 9.0, "type": "face_cam"},\n'
+        '  {"start": 9.0, "end": 18.5, "type": "broll", "keyword": "morning coffee laptop"},\n'
+        f'  {{"start": 18.5, "end": {duration:.1f}, "type": "face_cam"}}\n'
+        "]\n\n"
+        f"The last segment MUST end at exactly {duration:.1f}"
     )
 
-    text = resp.content[0].text.strip()
+    resp = model.generate_content(prompt)
+    text = resp.text.strip()
     if text.startswith("```"):
         parts = text.split("```")
         text = parts[1] if len(parts) > 1 else text
@@ -159,11 +139,9 @@ def analyze_segments(transcript, duration, api_key):
             text = text[4:]
     segments = json.loads(text.strip())
 
-    # Enforce exact duration at the end
     if segments:
         segments[-1]["end"] = duration
 
-    # Merge adjacent same-type segments that would be under 3 seconds
     merged = [segments[0]]
     for seg in segments[1:]:
         last = merged[-1]
@@ -192,7 +170,6 @@ def search_pexels_video(keyword):
     if not videos:
         return None
 
-    # Prefer genuine portrait files (width < height)
     for video in videos:
         for vf in sorted(
             video.get("video_files", []),
@@ -201,7 +178,6 @@ def search_pexels_video(keyword):
             if vf.get("width", 9999) < vf.get("height", 0):
                 return vf["link"]
 
-    # Fallback: first available file
     for video in videos:
         files = video.get("video_files", [])
         if files:
@@ -243,29 +219,23 @@ def process_video(video_path, job_id, api_key, progress_cb):
     work = f"jobs/{job_id}"
     os.makedirs(work, exist_ok=True)
 
-    # 1 — video info
     progress_cb(3, "Reading video info…")
     width, height, duration = get_video_info(video_path)
 
-    # 2 — audio
     progress_cb(8, "Extracting audio…")
     audio_path = f"{work}/audio.mp3"
     extract_audio(video_path, audio_path)
 
-    # 3 — transcribe (Whisper model downloads ~150 MB on first run)
-    progress_cb(15, "Transcribing audio (first run downloads Whisper model ~150 MB)…")
+    progress_cb(15, "Transcribing audio (first run downloads Whisper model ~75 MB)…")
     transcript = transcribe_audio(audio_path, api_key, duration)
 
-    # 4 — plan edit
-    progress_cb(40, "Planning b-roll segments with Claude…")
+    progress_cb(40, "Planning b-roll segments with Gemini…")
     segments = analyze_segments(transcript, duration, api_key)
 
-    # Persist edit plan so the status endpoint can surface it
     with open(f"{work}/edit_plan.json", "w") as _f:
         json.dump(segments, _f)
 
-    # 5 — download b-roll clips
-    broll_clips = {}          # broll_index -> local path or None
+    broll_clips = {}
     broll_segs = [s for s in segments if s["type"] == "broll"]
     n_broll = max(len(broll_segs), 1)
 
@@ -281,7 +251,6 @@ def process_video(video_path, job_id, api_key, progress_cb):
         else:
             broll_clips[idx] = None
 
-    # 6 — cut every segment
     progress_cb(72, "Cutting segments…")
     seg_files = []
     broll_idx = 0
@@ -298,12 +267,10 @@ def process_video(video_path, job_id, api_key, progress_cb):
             if clip:
                 cut_broll(clip, dur, out, width, height)
             else:
-                # fall back to face cam if Pexels had nothing
                 cut_face_cam(video_path, seg["start"], dur, out, width, height)
 
         seg_files.append(out)
 
-    # 7 — concatenate video-only stream
     progress_cb(85, "Joining clips…")
     concat_txt = f"{work}/concat.txt"
     with open(concat_txt, "w") as f:
@@ -317,7 +284,6 @@ def process_video(video_path, job_id, api_key, progress_cb):
         video_only, error_label="concat"
     )
 
-    # 8 — mux with original audio
     progress_cb(93, "Adding original audio…")
     output = f"{work}/output.mp4"
     run_ffmpeg(
