@@ -1,0 +1,21 @@
+name: Sync to Hugging Face Space
+
+on:
+  push:
+    branches:
+      - claude/b-roll-editor-tool-E9gnZ
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git push https://Johnnyblaze619:$HF_TOKEN@huggingface.co/spaces/Johnnyblaze619/Ai-b-roll-generator HEAD:main --force
