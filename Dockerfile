@@ -16,4 +16,4 @@ RUN mkdir -p uploads jobs
 ENV PORT=7860
 EXPOSE 7860
 
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--workers", "1", "--timeout", "600", "app:app"]
