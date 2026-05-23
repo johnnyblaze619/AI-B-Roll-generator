@@ -132,15 +132,15 @@ def analyze_segments(transcript, duration, api_key):
         f"Create exactly {n_broll} b-roll segments using this EXACT rhythm:\n"
         "  1. face_cam — HOOK: cover the first 1-2 sentences (6-10s)\n"
         f"  2. Alternate {n_broll} times: broll (12-20s) then face_cam (4-6s)\n"
-        "  3. The LAST face_cam is the CTA: cover the final 1-2 sentences (6-10s)\n\n"
+        "  3. The LAST face_cam is the CTA — MUST be 5-10s, covering the final 1-2 sentences\n\n"
         f"EXAMPLE for a {duration:.0f}s video with {n_broll} b-roll segments:\n"
         "  0-8s    face_cam  ← hook, first sentence\n"
-        "  8-25s   broll     ← 17s of b-roll\n"
+        "  8-25s   broll\n"
         "  25-30s  face_cam  ← 5s cutback\n"
-        "  30-47s  broll     ← 17s of b-roll\n"
+        "  30-47s  broll\n"
         "  47-52s  face_cam  ← 5s cutback\n"
-        "  52-69s  broll     ← 17s of b-roll\n"
-        f"  69-{duration:.0f}s  face_cam  ← CTA, last sentence\n\n"
+        "  52-69s  broll\n"
+        f"  69-{duration:.0f}s  face_cam  ← CTA, MINIMUM 5s, last sentence(s)\n\n"
         "Return ONLY valid JSON, no markdown, no keywords:\n"
         '[\n'
         '  {"start": 0.0, "end": 8.0, "type": "face_cam"},\n'
@@ -150,7 +150,7 @@ def analyze_segments(transcript, duration, api_key):
         f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
         "]\n"
         f"RULES: exactly {n_broll} broll entries. "
-        f"First and last segments are face_cam. Last ends at {duration:.1f}."
+        f"First and last segments are face_cam. Last face_cam is 5-10s. Last ends at {duration:.1f}."
     )
 
     text = _groq_llm(prompt, api_key)
@@ -158,6 +158,14 @@ def analyze_segments(transcript, duration, api_key):
 
     if segments:
         segments[-1]["end"] = duration
+
+    # Hard guarantee: CTA face cam must be at least 5s
+    if segments and segments[-1]["type"] == "face_cam":
+        cta_dur = segments[-1]["end"] - segments[-1]["start"]
+        if cta_dur < 5.0 and len(segments) >= 2:
+            deficit = 5.0 - cta_dur
+            segments[-2]["end"] -= deficit
+            segments[-1]["start"] -= deficit
 
     merged = [segments[0]]
     for seg in segments[1:]:
