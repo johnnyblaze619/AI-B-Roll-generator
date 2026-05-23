@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime directories
+uploads/
+jobs/
+
+# Test artifacts
+test_input.mp4
+/tmp/
+
+# Python virtual environments
+venv/
+.venv/
+env/
