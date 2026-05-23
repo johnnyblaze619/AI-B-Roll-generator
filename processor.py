@@ -5,11 +5,12 @@ import requests
 
 PEXELS_API_KEY = "LppRQMMFSN0E7avfYQUoeQVdifahsxZwB0Uzag6Z7OQhZvemwAYfQ5eu"
 GROQ_BASE = "https://api.groq.com/openai/v1"
+MAX_WIDTH = 720  # cap to avoid OOM on 512 MB containers
 
 
 def run_ffmpeg(*args, error_label="ffmpeg"):
     result = subprocess.run(
-        ["ffmpeg", "-y"] + list(args),
+        ["ffmpeg", "-y", "-threads", "1"] + list(args),
         capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -34,6 +35,16 @@ def get_video_info(path):
     if not width or not duration:
         raise ValueError("Could not read video dimensions or duration")
     return width, height, duration
+
+
+def _cap_resolution(width, height):
+    """Cap to MAX_WIDTH, keep aspect ratio, ensure dims divisible by 4."""
+    if width > MAX_WIDTH:
+        height = int(height * MAX_WIDTH / width)
+        width = MAX_WIDTH
+    width -= width % 2
+    height -= height % 4  # divisible by 4 so split-screen half is always even
+    return width, height
 
 
 def extract_audio(video_path, audio_path):
@@ -200,7 +211,6 @@ def cut_face_cam(original, start, dur, out, w, h):
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-threads", "1",
         out, error_label="face-cam cut"
     )
 
@@ -212,7 +222,6 @@ def cut_broll(broll_path, dur, out, w, h):
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                f"crop={w}:{h}",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-threads", "1",
         out, error_label="b-roll cut"
     )
 
@@ -224,6 +233,7 @@ def process_video(video_path, job_id, api_key, progress_cb):
 
     progress_cb(3, "Reading video info…")
     width, height, duration = get_video_info(video_path)
+    width, height = _cap_resolution(width, height)
 
     progress_cb(8, "Extracting audio…")
     audio_path = f"{work}/audio.mp3"
@@ -238,48 +248,33 @@ def process_video(video_path, job_id, api_key, progress_cb):
     with open(f"{work}/edit_plan.json", "w") as _f:
         json.dump(segments, _f)
 
-    broll_clips = {}
-    broll_segs = [s for s in segments if s["type"] == "broll"]
-    n_broll = max(len(broll_segs), 1)
-
-    for idx, seg in enumerate(broll_segs):
-        keyword = seg.get("keyword", "nature landscape")
-        pct = 50 + int(idx / n_broll * 20)
-        progress_cb(pct, f'Downloading b-roll: "{keyword}"...')
-        url = search_pexels_video(keyword)
-        if url:
-            clip = f"{work}/broll_{idx}.mp4"
-            download_video(url, clip)
-            broll_clips[idx] = clip
-        else:
-            broll_clips[idx] = None
-
-    progress_cb(72, "Cutting segments…")
     seg_files = []
-    broll_idx = 0
+    n_segs = len(segments)
 
     for i, seg in enumerate(segments):
         dur = seg["end"] - seg["start"]
         out = f"{work}/seg_{i:03d}.mp4"
+        pct = 50 + int((i / n_segs) * 35)
 
         if seg["type"] == "face_cam":
+            progress_cb(pct, f"Cutting face cam {i + 1}/{n_segs} ({dur:.0f}s)…")
             cut_face_cam(video_path, seg["start"], dur, out, width, height)
         else:
-            clip = broll_clips.get(broll_idx)
-            broll_idx += 1
-            if clip:
-                cut_broll(clip, dur, out, width, height)
+            keyword = seg.get("keyword", "nature landscape")
+            progress_cb(pct, f'Fetching b-roll: "{keyword}"…')
+            url = search_pexels_video(keyword)
+            if url:
+                tmp = f"{work}/broll_tmp.mp4"
+                download_video(url, tmp)
+                progress_cb(pct, f"Cutting b-roll {i + 1}/{n_segs} ({dur:.0f}s)…")
+                cut_broll(tmp, dur, out, width, height)
+                os.remove(tmp)  # delete immediately — never accumulate on disk
             else:
                 cut_face_cam(video_path, seg["start"], dur, out, width, height)
 
         seg_files.append(out)
 
-    # Free disk space — broll source clips no longer needed
-    for clip in broll_clips.values():
-        if clip and os.path.exists(clip):
-            os.remove(clip)
-
-    progress_cb(85, "Joining clips…")
+    progress_cb(87, "Joining clips…")
     concat_txt = f"{work}/concat.txt"
     with open(concat_txt, "w") as f:
         for sp in seg_files:
@@ -292,7 +287,7 @@ def process_video(video_path, job_id, api_key, progress_cb):
         video_only, error_label="concat"
     )
 
-    progress_cb(93, "Adding original audio…")
+    progress_cb(95, "Adding original audio…")
     output = f"{work}/output.mp4"
     run_ffmpeg(
         "-i", video_only,
@@ -314,6 +309,7 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
 
     progress_cb(3, "Reading video info…")
     width, height, duration = get_video_info(video_path)
+    width, height = _cap_resolution(width, height)
     h2 = height // 2
 
     progress_cb(8, "Extracting audio…")
@@ -354,7 +350,6 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
             "-t", str(part_dur),
             "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-            "-threads", "1",
             part_out, error_label=f"bottom part {i}"
         )
         bottom_parts.append(part_out)
@@ -379,7 +374,6 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
                f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-threads", "1",
         top_track, error_label="top track"
     )
 
@@ -397,7 +391,6 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         "-map", "[out]",
         "-map", "2:a:0",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-threads", "1",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         output, error_label="split screen composite"
