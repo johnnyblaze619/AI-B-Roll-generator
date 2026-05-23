@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>B-Roll Editor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0f14;
+      --card: #161920;
+      --border: #2a2d38;
+      --accent: #6c63ff;
+      --accent2: #ff6584;
+      --text: #e8eaf0;
+      --muted: #7a7f96;
+      --success: #34d399;
+      --error: #f87171;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 560px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 1.9rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 0.4rem;
+    }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 14px;
+      padding: 2rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    #drop-zone:hover,
+    #drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(108,99,255,0.06);
+    }
+    #drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+    }
+    #drop-zone .icon {
+      font-size: 2.4rem;
+      margin-bottom: 0.6rem;
+    }
+    #drop-zone p { color: var(--muted); font-size: 0.9rem; }
+    #drop-zone strong { color: var(--text); }
+    #file-name {
+      margin-top: 0.5rem;
+      font-size: 0.82rem;
+      color: var(--accent);
+      font-weight: 500;
+      min-height: 1.1rem;
+    }
+
+    /* API key */
+    .field { margin-top: 1.4rem; }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.45rem;
+    }
+    .field input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 1rem;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .field input::placeholder { color: var(--muted); }
+    .env-note {
+      font-size: 0.78rem;
+      color: var(--success);
+      margin-top: 0.4rem;
+    }
+
+    /* Button */
+    button#go-btn {
+      margin-top: 1.6rem;
+      width: 100%;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, var(--accent), #9b59ff);
+      border: none;
+      border-radius: 12px;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      letter-spacing: 0.02em;
+    }
+    button#go-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+    button#go-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Progress section */
+    #progress-section { display: none; margin-top: 2rem; }
+    .stage-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      margin-bottom: 0.55rem;
+    }
+    #stage-msg { color: var(--text); font-weight: 500; }
+    #pct-label { color: var(--muted); }
+
+    .bar-track {
+      height: 8px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    #bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width 0.4s ease;
+    }
+
+    /* Edit plan */
+    #plan-section {
+      display: none;
+      margin-top: 1.6rem;
+    }
+    #plan-section h3 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin-bottom: 0.7rem;
+    }
+    .seg-list { display: flex; flex-direction: column; gap: 0.4rem; }
+    .seg {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      font-size: 0.82rem;
+      padding: 0.45rem 0.8rem;
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .seg .badge {
+      padding: 0.15rem 0.55rem;
+      border-radius: 99px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      flex-shrink: 0;
+    }
+    .seg.face_cam .badge { background: rgba(108,99,255,0.2); color: var(--accent); }
+    .seg.broll .badge { background: rgba(255,101,132,0.18); color: var(--accent2); }
+    .seg .time { color: var(--muted); flex-shrink: 0; }
+    .seg .kw { color: var(--text); flex: 1; }
+
+    /* Result / error */
+    #result-section { display: none; margin-top: 1.6rem; text-align: center; }
+    #dl-btn {
+      display: inline-block;
+      padding: 0.85rem 2.5rem;
+      background: linear-gradient(135deg, var(--success), #059669);
+      border-radius: 12px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      transition: opacity 0.2s;
+    }
+    #dl-btn:hover { opacity: 0.88; }
+
+    #error-box {
+      display: none;
+      margin-top: 1.4rem;
+      background: rgba(248,113,113,0.1);
+      border: 1px solid rgba(248,113,113,0.3);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      font-size: 0.85rem;
+      color: var(--error);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <header>
+    <h1>B-Roll Editor</h1>
+    <p>Upload your talking-head video &rarr; get a polished edit with b-roll</p>
+  </header>
+
+  <!-- Upload -->
+  <div id="drop-zone">
+    <input type="file" id="file-input" accept="video/mp4,video/*" />
+    <div class="icon">🎬</div>
+    <p><strong>Drop your MP4 here</strong></p>
+    <p>or click to browse</p>
+    <div id="file-name"></div>
+  </div>
+
+  <!-- API key -->
+  {% if has_env_key %}
+  <div class="field">
+    <span class="env-note">✓ Anthropic API key loaded from environment</span>
+  </div>
+  {% else %}
+  <div class="field">
+    <label for="api-key">Anthropic API Key</label>
+    <input type="password" id="api-key" placeholder="sk-ant-…" autocomplete="off" />
+  </div>
+  {% endif %}
+
+  <button id="go-btn" disabled>Choose a video to start</button>
+
+  <!-- Progress -->
+  <div id="progress-section">
+    <div class="stage-label">
+      <span id="stage-msg">Starting…</span>
+      <span id="pct-label">0%</span>
+    </div>
+    <div class="bar-track"><div id="bar-fill"></div></div>
+  </div>
+
+  <!-- Edit plan preview -->
+  <div id="plan-section">
+    <h3>Edit Plan</h3>
+    <div class="seg-list" id="seg-list"></div>
+  </div>
+
+  <!-- Success download -->
+  <div id="result-section">
+    <a id="dl-btn" href="#">⬇ Download Finished Video</a>
+  </div>
+
+  <!-- Error -->
+  <div id="error-box"></div>
+</div>
+
+<script>
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const fileName  = document.getElementById('file-name');
+const goBtn     = document.getElementById('go-btn');
+const apiKeyEl  = document.getElementById('api-key');
+
+const progressSection = document.getElementById('progress-section');
+const stageMsg  = document.getElementById('stage-msg');
+const pctLabel  = document.getElementById('pct-label');
+const barFill   = document.getElementById('bar-fill');
+
+const planSection = document.getElementById('plan-section');
+const segList   = document.getElementById('seg-list');
+
+const resultSection = document.getElementById('result-section');
+const dlBtn     = document.getElementById('dl-btn');
+const errorBox  = document.getElementById('error-box');
+
+let selectedFile = null;
+let pollTimer = null;
+
+// Drag & drop visual
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) setFile(fileInput.files[0]);
+});
+
+function setFile(f) {
+  selectedFile = f;
+  fileName.textContent = f.name + '  (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+  goBtn.disabled = false;
+  goBtn.textContent = 'Generate B-Roll Edit ✨';
+}
+
+goBtn.addEventListener('click', startJob);
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function renderPlan(segs) {
+  segList.innerHTML = '';
+  segs.forEach(s => {
+    const el = document.createElement('div');
+    el.className = `seg ${s.type}`;
+    const label = s.type === 'face_cam' ? 'Face Cam' : 'B-Roll';
+    const kw = s.keyword ? ` — ${s.keyword}` : '';
+    el.innerHTML = `
+      <span class="badge">${label}</span>
+      <span class="time">${fmtTime(s.start)} → ${fmtTime(s.end)}</span>
+      <span class="kw">${kw}</span>
+    `;
+    segList.appendChild(el);
+  });
+  planSection.style.display = 'block';
+}
+
+async function startJob() {
+  if (!selectedFile) return;
+
+  const apiKey = apiKeyEl ? apiKeyEl.value.trim() : '';
+  if (apiKeyEl && !apiKey) {
+    errorBox.textContent = 'Please enter your Anthropic API key.';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  // Reset UI
+  errorBox.style.display = 'none';
+  resultSection.style.display = 'none';
+  planSection.style.display = 'none';
+  segList.innerHTML = '';
+  goBtn.disabled = true;
+  goBtn.innerHTML = '<span class="spinner"></span>Uploading…';
+  progressSection.style.display = 'block';
+  setProgress(0, 'Uploading video…');
+
+  const form = new FormData();
+  form.append('video', selectedFile);
+  if (apiKey) form.append('api_key', apiKey);
+
+  let res;
+  try {
+    res = await fetch('/process', { method: 'POST', body: form });
+  } catch (e) {
+    showError('Upload failed: ' + e.message);
+    return;
+  }
+
+  const data = await res.json();
+  if (data.error) { showError(data.error); return; }
+
+  const jobId = data.job_id;
+  goBtn.innerHTML = '<span class="spinner"></span>Processing…';
+
+  // Poll every 2s
+  pollTimer = setInterval(() => poll(jobId), 2000);
+}
+
+async function poll(jobId) {
+  let data;
+  try {
+    const res = await fetch(`/status/${jobId}`);
+    data = await res.json();
+  } catch { return; }
+
+  setProgress(data.progress || 0, data.message || '');
+
+  if (data.edit_plan && segList.children.length === 0) {
+    renderPlan(data.edit_plan);
+  }
+
+  if (data.status === 'done') {
+    clearInterval(pollTimer);
+    setProgress(100, 'Complete!');
+    goBtn.disabled = false;
+    goBtn.textContent = 'Generate Another Edit ✨';
+    dlBtn.href = `/download/${jobId}`;
+    resultSection.style.display = 'block';
+  } else if (data.status === 'error') {
+    clearInterval(pollTimer);
+    showError(data.message);
+    goBtn.disabled = false;
+    goBtn.textContent = 'Try Again';
+  }
+}
+
+function setProgress(pct, msg) {
+  barFill.style.width = pct + '%';
+  pctLabel.textContent = pct + '%';
+  stageMsg.textContent = msg;
+}
+
+function showError(msg) {
+  progressSection.style.display = 'none';
+  errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+  goBtn.disabled = false;
+  goBtn.textContent = 'Try Again';
+}
+</script>
+</body>
+</html>
