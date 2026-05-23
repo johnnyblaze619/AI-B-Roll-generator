@@ -113,34 +113,41 @@ def analyze_segments(transcript, duration, api_key):
         for s in transcript
     )
 
+    n_broll = 6 if duration >= 90 else 5
+
     prompt = (
-        "You are a professional video editor. Create a b-roll edit plan with a BEAUTIFUL RHYTHM.\n\n"
-        f"VIDEO TRANSCRIPT ({duration:.0f} seconds total):\n{lines}\n\n"
-        "RHYTHM RULES — follow exactly:\n"
-        "1. Segment 1: face_cam, 8-12s  ← the HOOK, always open on face\n"
-        "2. Then alternate: broll (12-20s) → face_cam (4-8s) → broll (12-20s) → face_cam (4-8s) ...\n"
-        "3. Final segment: face_cam, 6-12s  ← the CTA close, always end on face\n"
-        "4. broll segments: MINIMUM 12 seconds — never shorter, aim for 15-18s\n"
-        "5. Middle face_cam cutbacks: 4-8 seconds ONLY — brief glimpse of the speaker\n"
-        "6. Target 55-65% b-roll total coverage\n"
-        f"7. All segments contiguous, covering 0.0 to {duration:.1f}s exactly, no gaps\n"
-        "8. broll keyword: 2-4 concrete visual words for Pexels search\n\n"
-        "EXAMPLE RHYTHM for a ~80s video:\n"
-        "  0-10s face_cam (hook)\n"
-        "  10-27s broll 'city coffee morning'\n"
-        "  27-32s face_cam\n"
-        "  32-50s broll 'laptop desk working'\n"
-        "  50-55s face_cam\n"
-        "  55-72s broll 'phone social media'\n"
-        "  72-80s face_cam (CTA)\n\n"
-        "Return ONLY a valid JSON array, no markdown, no explanation:\n"
+        "You are a professional video editor creating a viral short-form edit.\n\n"
+        f"VIDEO TRANSCRIPT ({duration:.0f}s total):\n{lines}\n\n"
+        f"CREATE EXACTLY {n_broll} b-roll segments with this rhythm:\n"
+        "  • HOOK: face_cam 6-9s\n"
+        f"  • Repeat {n_broll}x: broll (8-13s) → face_cam (3-5s)\n"
+        "  • CTA: face_cam 5-8s\n\n"
+        "KEYWORD RULES — critical for quality:\n"
+        "  • Read the transcript text that falls inside each b-roll time window\n"
+        "  • Pick a keyword that VISUALLY shows what is being SAID at that moment\n"
+        "  • Be specific and concrete — not 'technology' but 'person typing laptop cafe'\n"
+        "  • 2-5 words, Pexels-friendly search terms\n\n"
+        f"EXAMPLE for a {duration:.0f}s video ({n_broll} b-roll):\n"
+        "  0-8s   face_cam  (hook)\n"
+        "  8-19s  broll     keyword matching what is said at 8-19s\n"
+        "  19-23s face_cam\n"
+        "  23-34s broll     keyword matching what is said at 23-34s\n"
+        "  34-38s face_cam\n"
+        "  38-49s broll     keyword matching what is said at 38-49s\n"
+        "  49-53s face_cam\n"
+        "  53-64s broll     keyword matching what is said at 53-64s\n"
+        "  64-68s face_cam\n"
+        "  68-79s broll     keyword matching what is said at 68-79s\n"
+        f"  79-{duration:.0f}s face_cam  (CTA)\n\n"
+        "Return ONLY valid JSON, no markdown:\n"
         '[\n'
-        '  {"start": 0.0, "end": 10.0, "type": "face_cam"},\n'
-        '  {"start": 10.0, "end": 27.0, "type": "broll", "keyword": "city coffee morning"},\n'
+        '  {"start": 0.0, "end": 8.0, "type": "face_cam"},\n'
+        '  {"start": 8.0, "end": 19.0, "type": "broll", "keyword": "person typing laptop cafe"},\n'
         '  ...\n'
         f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
         "]\n"
-        f"IMPORTANT: last segment MUST end at {duration:.1f} and MUST be face_cam."
+        f"HARD RULES: exactly {n_broll} broll entries. "
+        f"Last segment ends at {duration:.1f} and is face_cam."
     )
 
     text = _groq_llm(prompt, api_key)
@@ -173,7 +180,7 @@ def get_broll_keywords(transcript, api_key):
 
 def search_pexels_video(keyword):
     headers = {"Authorization": PEXELS_API_KEY}
-    params = {"query": keyword, "orientation": "portrait", "per_page": 10, "size": "small"}
+    params = {"query": keyword, "orientation": "portrait", "per_page": 15, "size": "medium"}
     resp = requests.get(
         "https://api.pexels.com/videos/search",
         headers=headers, params=params, timeout=30
@@ -182,6 +189,9 @@ def search_pexels_video(keyword):
     videos = resp.json().get("videos", [])
     if not videos:
         return None
+
+    # Prefer the longest portrait clip to avoid looping
+    videos.sort(key=lambda v: v.get("duration", 0), reverse=True)
 
     for video in videos:
         for vf in sorted(video.get("video_files", []),
