@@ -107,6 +107,17 @@ def _groq_llm(prompt, api_key):
     return text.strip()
 
 
+def _sentences_in_range(transcript, start, end):
+    """Return transcript sentences that overlap [start, end], clamped to that range."""
+    result = []
+    for s in transcript:
+        s_start = max(s["start"], start)
+        s_end = min(s["end"], end)
+        if s_end - s_start >= 0.5:
+            result.append({"start": s_start, "end": s_end, "text": s["text"]})
+    return result
+
+
 def analyze_segments(transcript, duration, api_key):
     lines = "\n".join(
         f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}"
@@ -116,38 +127,20 @@ def analyze_segments(transcript, duration, api_key):
     n_broll = 6 if duration >= 90 else 5
 
     prompt = (
-        "You are a professional video editor creating a viral short-form edit.\n\n"
-        f"VIDEO TRANSCRIPT ({duration:.0f}s total):\n{lines}\n\n"
-        f"CREATE EXACTLY {n_broll} b-roll segments with this rhythm:\n"
+        "You are a professional video editor.\n\n"
+        f"TRANSCRIPT ({duration:.0f}s):\n{lines}\n\n"
+        f"Plan exactly {n_broll} b-roll segments with this rhythm:\n"
         "  • HOOK: face_cam 6-9s\n"
         f"  • Repeat {n_broll}x: broll (8-13s) → face_cam (3-5s)\n"
         "  • CTA: face_cam 5-8s\n\n"
-        "KEYWORD RULES — critical for quality:\n"
-        "  • Read the transcript text that falls inside each b-roll time window\n"
-        "  • Pick a keyword that VISUALLY shows what is being SAID at that moment\n"
-        "  • Be specific and concrete — not 'technology' but 'person typing laptop cafe'\n"
-        "  • 2-5 words, Pexels-friendly search terms\n\n"
-        f"EXAMPLE for a {duration:.0f}s video ({n_broll} b-roll):\n"
-        "  0-8s   face_cam  (hook)\n"
-        "  8-19s  broll     keyword matching what is said at 8-19s\n"
-        "  19-23s face_cam\n"
-        "  23-34s broll     keyword matching what is said at 23-34s\n"
-        "  34-38s face_cam\n"
-        "  38-49s broll     keyword matching what is said at 38-49s\n"
-        "  49-53s face_cam\n"
-        "  53-64s broll     keyword matching what is said at 53-64s\n"
-        "  64-68s face_cam\n"
-        "  68-79s broll     keyword matching what is said at 68-79s\n"
-        f"  79-{duration:.0f}s face_cam  (CTA)\n\n"
-        "Return ONLY valid JSON, no markdown:\n"
+        "Return ONLY valid JSON — no keywords needed, just type and timing:\n"
         '[\n'
         '  {"start": 0.0, "end": 8.0, "type": "face_cam"},\n'
-        '  {"start": 8.0, "end": 19.0, "type": "broll", "keyword": "person typing laptop cafe"},\n'
+        '  {"start": 8.0, "end": 20.0, "type": "broll"},\n'
         '  ...\n'
         f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
         "]\n"
-        f"HARD RULES: exactly {n_broll} broll entries. "
-        f"Last segment ends at {duration:.1f} and is face_cam."
+        f"Exactly {n_broll} broll entries. Last segment ends at {duration:.1f} and is face_cam."
     )
 
     text = _groq_llm(prompt, api_key)
@@ -178,9 +171,9 @@ def get_broll_keywords(transcript, api_key):
     return [k for k in keywords if isinstance(k, str)][:3]
 
 
-def search_pexels_video(keyword):
+def search_pexels_video(query):
     headers = {"Authorization": PEXELS_API_KEY}
-    params = {"query": keyword, "orientation": "portrait", "per_page": 15, "size": "medium"}
+    params = {"query": query, "orientation": "portrait", "per_page": 15}
     resp = requests.get(
         "https://api.pexels.com/videos/search",
         headers=headers, params=params, timeout=30
@@ -190,20 +183,14 @@ def search_pexels_video(keyword):
     if not videos:
         return None
 
-    # Prefer the longest portrait clip to avoid looping
-    videos.sort(key=lambda v: v.get("duration", 0), reverse=True)
-
     for video in videos:
         for vf in sorted(video.get("video_files", []),
                          key=lambda x: x.get("height", 0), reverse=True):
             if vf.get("width", 9999) < vf.get("height", 0):
                 return vf["link"]
 
-    for video in videos:
-        files = video.get("video_files", [])
-        if files:
-            return files[0]["link"]
-    return None
+    files = videos[0].get("video_files", [])
+    return files[0]["link"] if files else None
 
 
 def download_video(url, dest):
@@ -267,20 +254,55 @@ def process_video(video_path, job_id, api_key, progress_cb):
         pct = 50 + int((i / n_segs) * 35)
 
         if seg["type"] == "face_cam":
-            progress_cb(pct, f"Cutting face cam {i + 1}/{n_segs} ({dur:.0f}s)…")
+            progress_cb(pct, f"Face cam {i + 1}/{n_segs} ({dur:.0f}s)…")
             cut_face_cam(video_path, seg["start"], dur, out, width, height)
         else:
-            keyword = seg.get("keyword", "nature landscape")
-            progress_cb(pct, f'Fetching b-roll: "{keyword}"…')
-            url = search_pexels_video(keyword)
-            if url:
-                tmp = f"{work}/broll_tmp.mp4"
-                download_video(url, tmp)
-                progress_cb(pct, f"Cutting b-roll {i + 1}/{n_segs} ({dur:.0f}s)…")
-                cut_broll(tmp, dur, out, width, height)
-                os.remove(tmp)  # delete immediately — never accumulate on disk
+            # One b-roll clip per sentence spoken during this segment
+            sentences = _sentences_in_range(transcript, seg["start"], seg["end"])
+            if not sentences:
+                sentences = [{"start": seg["start"], "end": seg["end"], "text": ""}]
+
+            total_sent = sum(s["end"] - s["start"] for s in sentences)
+            sent_clips = []
+
+            for j, sent in enumerate(sentences):
+                raw = sent["end"] - sent["start"]
+                clip_dur = max(raw * dur / total_sent, 1.0) if total_sent > 0 else max(dur / len(sentences), 1.0)
+                sc_out = f"{work}/bsc_{i}_{j}.mp4"
+                query = sent["text"].strip()
+
+                url = None
+                if query:
+                    progress_cb(pct, f'B-roll: "{query[:50]}"…')
+                    url = search_pexels_video(query)
+                    if not url and len(query.split()) > 3:
+                        url = search_pexels_video(" ".join(query.split()[:4]))
+
+                if url:
+                    tmp = f"{work}/btmp_{i}_{j}.mp4"
+                    download_video(url, tmp)
+                    cut_broll(tmp, clip_dur, sc_out, width, height)
+                    os.remove(tmp)
+                else:
+                    cut_face_cam(video_path, sent["start"], clip_dur, sc_out, width, height)
+
+                sent_clips.append(sc_out)
+
+            if len(sent_clips) == 1:
+                os.rename(sent_clips[0], out)
             else:
-                cut_face_cam(video_path, seg["start"], dur, out, width, height)
+                cat_txt = f"{work}/bcat_{i}.txt"
+                with open(cat_txt, "w") as f:
+                    for sc in sent_clips:
+                        f.write(f"file '{os.path.abspath(sc)}'\n")
+                run_ffmpeg(
+                    "-f", "concat", "-safe", "0", "-i", cat_txt,
+                    "-c:v", "copy",
+                    out, error_label=f"broll concat {i}"
+                )
+                for sc in sent_clips:
+                    if os.path.exists(sc):
+                        os.remove(sc)
 
         seg_files.append(out)
 
