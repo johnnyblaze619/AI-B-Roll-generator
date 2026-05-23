@@ -225,11 +225,11 @@ def download_video(url, dest):
 def cut_face_cam(original, start, dur, out, w, h):
     run_ffmpeg(
         "-ss", str(start), "-i", original,
-        "-t", str(dur),
         "-vf", f"setpts=PTS-STARTPTS,"
                f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
         "-r", "30",
+        "-frames:v", str(round(dur * 30)),
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         out, error_label="face-cam cut"
     )
@@ -238,11 +238,11 @@ def cut_face_cam(original, start, dur, out, w, h):
 def cut_broll(broll_path, dur, out, w, h):
     run_ffmpeg(
         "-stream_loop", "-1", "-i", broll_path,
-        "-t", str(dur),
         "-vf", f"setpts=PTS-STARTPTS,"
                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                f"crop={w}:{h}",
         "-r", "30",
+        "-frames:v", str(round(dur * 30)),
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         out, error_label="b-roll cut"
     )
@@ -313,21 +313,21 @@ def process_video(video_path, job_id, api_key, progress_cb):
 
                 sent_clips.append(sc_out)
 
-            if len(sent_clips) == 1:
-                os.rename(sent_clips[0], out)
-            else:
-                cat_txt = f"{work}/bcat_{i}.txt"
-                with open(cat_txt, "w") as f:
-                    for sc in sent_clips:
-                        f.write(f"file '{os.path.abspath(sc)}'\n")
-                run_ffmpeg(
-                    "-f", "concat", "-safe", "0", "-i", cat_txt,
-                    "-c:v", "copy",
-                    out, error_label=f"broll concat {i}"
-                )
+            cat_txt = f"{work}/bcat_{i}.txt"
+            with open(cat_txt, "w") as f:
                 for sc in sent_clips:
-                    if os.path.exists(sc):
-                        os.remove(sc)
+                    f.write(f"file '{os.path.abspath(sc)}'\n")
+            run_ffmpeg(
+                "-f", "concat", "-safe", "0", "-i", cat_txt,
+                "-vf", "setpts=PTS-STARTPTS",
+                "-r", "30",
+                "-frames:v", str(round(dur * 30)),
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                out, error_label=f"broll concat {i}"
+            )
+            for sc in sent_clips:
+                if os.path.exists(sc):
+                    os.remove(sc)
 
         seg_files.append(out)
 
