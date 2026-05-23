@@ -13,7 +13,7 @@ COPY . .
 
 RUN mkdir -p uploads jobs
 
-ENV PORT=10000
-EXPOSE 10000
+ENV PORT=7860
+EXPOSE 7860
 
 CMD ["python", "app.py"]

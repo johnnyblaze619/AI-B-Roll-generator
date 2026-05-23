@@ -1,5 +1,5 @@
 ---
-title: B-Roll Editor
+title: AI B-Roll Generator
 emoji: 🎬
 colorFrom: purple
 colorTo: pink
@@ -7,14 +7,14 @@ sdk: docker
 pinned: false
 ---
 
-# B-Roll Editor
+# AI B-Roll Generator
 
 Upload a talking-head MP4 → get a polished edit with b-roll cutaways, automatically.
 
 **How it works:**
-1. Whisper transcribes your audio with accurate timestamps
-2. Claude (Anthropic) reads the transcript and plans which moments get b-roll vs face cam
-3. Pexels provides free portrait 9:16 stock clips for each b-roll segment
+1. Groq Whisper transcribes your audio in seconds
+2. Groq LLaMA plans which moments get b-roll vs face cam
+3. Pexels provides free portrait 9:16 stock clips
 4. ffmpeg composites the final video — your original audio runs throughout
 
-**You need:** An [Anthropic API key](https://console.anthropic.com)
+**You need:** A free [Groq API key](https://console.groq.com)
