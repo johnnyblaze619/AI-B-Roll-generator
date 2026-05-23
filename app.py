@@ -14,7 +14,6 @@ jobs = {}  # job_id -> {progress, message, status, output}
 
 
 def _env_api_key() -> str:
-    """Return the Groq API key from the environment."""
     return os.environ.get("GROQ_API_KEY", "")
 
 
@@ -34,6 +33,7 @@ def process():
     if not api_key:
         return jsonify({"error": "Groq API key is required"}), 400
 
+    mode = request.form.get("mode", "mix")
     job_id = str(uuid.uuid4())
     upload_path = f"uploads/{job_id}.mp4"
     video.save(upload_path)
@@ -48,13 +48,17 @@ def process():
 
     def run():
         try:
-            from processor import process_video
-
             def progress_cb(pct, msg):
                 jobs[job_id]["progress"] = pct
                 jobs[job_id]["message"] = msg
 
-            output = process_video(upload_path, job_id, api_key, progress_cb)
+            if mode == "split":
+                from processor import process_video_split_screen
+                output = process_video_split_screen(upload_path, job_id, api_key, progress_cb)
+            else:
+                from processor import process_video
+                output = process_video(upload_path, job_id, api_key, progress_cb)
+
             jobs[job_id]["status"] = "done"
             jobs[job_id]["output"] = output
         except Exception as exc:

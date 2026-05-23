@@ -75,33 +75,7 @@ def transcribe_audio(audio_path, api_key, duration):
     return transcript
 
 
-def analyze_segments(transcript, duration, api_key):
-    lines = "\n".join(
-        f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}"
-        for s in transcript
-    )
-
-    prompt = (
-        "You are a professional video editor. Analyze this transcript and create an edit plan.\n\n"
-        f"TRANSCRIPT:\n{lines}\n\n"
-        "RULES:\n"
-        '1. face_cam: hooks (opening ~10s), CTAs, emotional/personal moments, direct address\n'
-        "2. broll: describing products, places, concepts, tips, steps — anything visual\n"
-        "3. Minimum 3 seconds per segment\n"
-        "4. Aim for 40-60% b-roll coverage\n"
-        f"5. Segments must be contiguous, covering 0.0 to {duration:.1f}s exactly\n"
-        "6. For broll: 2-4 word Pexels keyword (concrete, visual, searchable)\n"
-        "7. First segment is almost always face_cam (the hook)\n"
-        "8. Last segment is often face_cam (the CTA)\n\n"
-        "Return ONLY a JSON array, no markdown:\n"
-        '[\n'
-        '  {"start": 0.0, "end": 9.0, "type": "face_cam"},\n'
-        '  {"start": 9.0, "end": 18.5, "type": "broll", "keyword": "morning coffee laptop"},\n'
-        f'  {{"start": 18.5, "end": {duration:.1f}, "type": "face_cam"}}\n'
-        "]\n\n"
-        f"The last segment MUST end at exactly {duration:.1f}"
-    )
-
+def _groq_llm(prompt, api_key):
     resp = requests.post(
         f"{GROQ_BASE}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -114,30 +88,81 @@ def analyze_segments(transcript, duration, api_key):
     )
     resp.raise_for_status()
     text = resp.json()["choices"][0]["message"]["content"].strip()
-
     if text.startswith("```"):
         parts = text.split("```")
         text = parts[1] if len(parts) > 1 else text
         if text.startswith("json"):
             text = text[4:]
-    segments = json.loads(text.strip())
+    return text.strip()
+
+
+def analyze_segments(transcript, duration, api_key):
+    lines = "\n".join(
+        f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}"
+        for s in transcript
+    )
+
+    prompt = (
+        "You are a professional video editor. Create a b-roll edit plan with a BEAUTIFUL RHYTHM.\n\n"
+        f"VIDEO TRANSCRIPT ({duration:.0f} seconds total):\n{lines}\n\n"
+        "RHYTHM RULES — follow exactly:\n"
+        "1. Segment 1: face_cam, 8-12s  ← the HOOK, always open on face\n"
+        "2. Then alternate: broll (12-20s) → face_cam (4-8s) → broll (12-20s) → face_cam (4-8s) ...\n"
+        "3. Final segment: face_cam, 6-12s  ← the CTA close, always end on face\n"
+        "4. broll segments: MINIMUM 12 seconds — never shorter, aim for 15-18s\n"
+        "5. Middle face_cam cutbacks: 4-8 seconds ONLY — brief glimpse of the speaker\n"
+        "6. Target 55-65% b-roll total coverage\n"
+        f"7. All segments contiguous, covering 0.0 to {duration:.1f}s exactly, no gaps\n"
+        "8. broll keyword: 2-4 concrete visual words for Pexels search\n\n"
+        "EXAMPLE RHYTHM for a ~80s video:\n"
+        "  0-10s face_cam (hook)\n"
+        "  10-27s broll 'city coffee morning'\n"
+        "  27-32s face_cam\n"
+        "  32-50s broll 'laptop desk working'\n"
+        "  50-55s face_cam\n"
+        "  55-72s broll 'phone social media'\n"
+        "  72-80s face_cam (CTA)\n\n"
+        "Return ONLY a valid JSON array, no markdown, no explanation:\n"
+        '[\n'
+        '  {"start": 0.0, "end": 10.0, "type": "face_cam"},\n'
+        '  {"start": 10.0, "end": 27.0, "type": "broll", "keyword": "city coffee morning"},\n'
+        '  ...\n'
+        f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
+        "]\n"
+        f"IMPORTANT: last segment MUST end at {duration:.1f} and MUST be face_cam."
+    )
+
+    text = _groq_llm(prompt, api_key)
+    segments = json.loads(text)
 
     if segments:
         segments[-1]["end"] = duration
 
     merged = [segments[0]]
     for seg in segments[1:]:
-        last = merged[-1]
         if seg["end"] - seg["start"] < 3.0:
-            last["end"] = seg["end"]
+            merged[-1]["end"] = seg["end"]
         else:
             merged.append(seg)
     return merged
 
 
+def get_broll_keywords(transcript, api_key):
+    text_sample = " ".join(s["text"] for s in transcript)[:1000]
+    prompt = (
+        "Given this video transcript, suggest 3 visual topics for b-roll footage.\n"
+        f"TRANSCRIPT: {text_sample}\n\n"
+        "Return ONLY a JSON array of 2-4 word Pexels search keywords:\n"
+        '["keyword one", "keyword two", "keyword three"]'
+    )
+    result = _groq_llm(prompt, api_key)
+    keywords = json.loads(result)
+    return [k for k in keywords if isinstance(k, str)][:3]
+
+
 def search_pexels_video(keyword):
     headers = {"Authorization": PEXELS_API_KEY}
-    params = {"query": keyword, "orientation": "portrait", "per_page": 10, "size": "medium"}
+    params = {"query": keyword, "orientation": "portrait", "per_page": 10, "size": "small"}
     resp = requests.get(
         "https://api.pexels.com/videos/search",
         headers=headers, params=params, timeout=30
@@ -191,6 +216,7 @@ def cut_broll(broll_path, dur, out, w, h):
 
 
 def process_video(video_path, job_id, api_key, progress_cb):
+    """Mix Edit mode: alternates face cam and b-roll segments."""
     work = f"jobs/{job_id}"
     os.makedirs(work, exist_ok=True)
 
@@ -246,6 +272,11 @@ def process_video(video_path, job_id, api_key, progress_cb):
 
         seg_files.append(out)
 
+    # Free disk space — broll source clips no longer needed
+    for clip in broll_clips.values():
+        if clip and os.path.exists(clip):
+            os.remove(clip)
+
     progress_cb(85, "Joining clips…")
     concat_txt = f"{work}/concat.txt"
     with open(concat_txt, "w") as f:
@@ -268,6 +299,103 @@ def process_video(video_path, job_id, api_key, progress_cb):
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         output, error_label="mux audio"
+    )
+
+    progress_cb(100, "Done!")
+    return output
+
+
+def process_video_split_screen(video_path, job_id, api_key, progress_cb):
+    """Split Screen mode: face cam on top half, b-roll looping on bottom half."""
+    work = f"jobs/{job_id}"
+    os.makedirs(work, exist_ok=True)
+
+    progress_cb(3, "Reading video info…")
+    width, height, duration = get_video_info(video_path)
+    h2 = height // 2
+
+    progress_cb(8, "Extracting audio…")
+    audio_path = f"{work}/audio.mp3"
+    extract_audio(video_path, audio_path)
+
+    progress_cb(15, "Transcribing with Groq Whisper…")
+    transcript = transcribe_audio(audio_path, api_key, duration)
+
+    progress_cb(35, "Selecting b-roll themes…")
+    keywords = get_broll_keywords(transcript, api_key)
+
+    with open(f"{work}/edit_plan.json", "w") as _f:
+        json.dump([{"type": "split_screen", "keywords": keywords}], _f)
+
+    broll_paths = []
+    for idx, kw in enumerate(keywords[:3]):
+        pct = 45 + idx * 10
+        progress_cb(pct, f'Downloading b-roll: "{kw}"…')
+        url = search_pexels_video(kw)
+        if url:
+            clip = f"{work}/broll_{idx}.mp4"
+            download_video(url, clip)
+            broll_paths.append(clip)
+
+    if not broll_paths:
+        broll_paths = [video_path]
+
+    progress_cb(75, "Building split-screen…")
+
+    n = len(broll_paths)
+    part_dur = duration / n
+    bottom_parts = []
+    for i, clip in enumerate(broll_paths):
+        part_out = f"{work}/bottom_{i}.mp4"
+        run_ffmpeg(
+            "-stream_loop", "-1", "-i", clip,
+            "-t", str(part_dur),
+            "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
+            "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            part_out, error_label=f"bottom part {i}"
+        )
+        bottom_parts.append(part_out)
+
+    if len(bottom_parts) == 1:
+        bottom_track = bottom_parts[0]
+    else:
+        concat_txt = f"{work}/bottom_concat.txt"
+        with open(concat_txt, "w") as f:
+            for p in bottom_parts:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+        bottom_track = f"{work}/bottom_track.mp4"
+        run_ffmpeg(
+            "-f", "concat", "-safe", "0", "-i", concat_txt,
+            "-c:v", "copy",
+            bottom_track, error_label="bottom concat"
+        )
+
+    top_track = f"{work}/top_track.mp4"
+    run_ffmpeg(
+        "-i", video_path,
+        "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
+               f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
+        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        top_track, error_label="top track"
+    )
+
+    for clip in broll_paths:
+        if clip != video_path and os.path.exists(clip):
+            os.remove(clip)
+
+    progress_cb(92, "Compositing final video…")
+    output = f"{work}/output.mp4"
+    run_ffmpeg(
+        "-i", top_track,
+        "-i", bottom_track,
+        "-i", video_path,
+        "-filter_complex", "[0:v][1:v]vstack=inputs=2[out]",
+        "-map", "[out]",
+        "-map", "2:a:0",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        output, error_label="split screen composite"
     )
 
     progress_cb(100, "Done!")
