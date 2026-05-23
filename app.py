@@ -2,7 +2,7 @@ import os
 import uuid
 import threading
 import json
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB upload limit
@@ -14,8 +14,8 @@ jobs = {}  # job_id -> {progress, message, status, output}
 
 
 def _env_api_key() -> str:
-    """Return the Gemini API key from the environment."""
-    return os.environ.get("GEMINI_API_KEY", "")
+    """Return the Groq API key from the environment."""
+    return os.environ.get("GROQ_API_KEY", "")
 
 
 @app.route("/")
@@ -32,7 +32,7 @@ def process():
 
     api_key = request.form.get("api_key") or _env_api_key()
     if not api_key:
-        return jsonify({"error": "Gemini API key is required"}), 400
+        return jsonify({"error": "Groq API key is required"}), 400
 
     job_id = str(uuid.uuid4())
     upload_path = f"uploads/{job_id}.mp4"

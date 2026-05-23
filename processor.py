@@ -4,6 +4,7 @@ import subprocess
 import requests
 
 PEXELS_API_KEY = "LppRQMMFSN0E7avfYQUoeQVdifahsxZwB0Uzag6Z7OQhZvemwAYfQ5eu"
+GROQ_BASE = "https://api.groq.com/openai/v1"
 
 
 def run_ffmpeg(*args, error_label="ffmpeg"):
@@ -45,53 +46,28 @@ def extract_audio(video_path, audio_path):
     )
 
 
-def transcribe_audio(audio_path, _api_key, duration):
-    """Transcribe using OpenAI Whisper (open-source, no API key needed).
-    Whisper gives accurate word-level timestamps; Gemini handles editorial analysis."""
-    from faster_whisper import WhisperModel
-    import os
+def transcribe_audio(audio_path, api_key, duration):
+    """Transcribe via Groq Whisper — runs in 1-3 seconds on their LPU chips."""
+    with open(audio_path, "rb") as f:
+        resp = requests.post(
+            f"{GROQ_BASE}/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"file": ("audio.mp3", f, "audio/mpeg")},
+            data={"model": "whisper-large-v3-turbo", "response_format": "verbose_json"},
+            timeout=120,
+        )
+    resp.raise_for_status()
+    data = resp.json()
 
-    cache_dir = os.environ.get("HF_HOME", None)
-    model = WhisperModel("tiny", device="cpu", compute_type="int8",
-                         download_root=cache_dir)
-    segments_iter, _ = model.transcribe(
-        audio_path,
-        beam_size=5,
-        word_timestamps=True,
-        vad_filter=True,
-    )
-
-    transcript = []
-    chunk_start = None
-    chunk_words = []
-    chunk_end = 0.0
-
-    for seg in segments_iter:
-        words = seg.words if seg.words else []
-        for w in words:
-            if chunk_start is None:
-                chunk_start = w.start
-            chunk_words.append(w.word)
-            chunk_end = w.end
-            is_sentence_end = w.word.strip().endswith(("." , "!", "?", ","))
-            chunk_duration = chunk_end - chunk_start
-            if is_sentence_end and chunk_duration >= 3.0 or chunk_duration >= 15.0:
-                transcript.append({
-                    "start": round(chunk_start, 2),
-                    "end": round(chunk_end, 2),
-                    "text": "".join(chunk_words).strip(),
-                })
-                chunk_start = None
-                chunk_words = []
-
-    if chunk_words and chunk_start is not None:
-        transcript.append({
-            "start": round(chunk_start, 2),
-            "end": round(duration, 2),
-            "text": "".join(chunk_words).strip(),
-        })
-    elif transcript:
-        transcript[-1]["end"] = round(duration, 2)
+    transcript = [
+        {
+            "start": round(s["start"], 2),
+            "end": round(s["end"], 2),
+            "text": s["text"].strip(),
+        }
+        for s in data.get("segments", [])
+        if s.get("text", "").strip()
+    ]
 
     if not transcript:
         transcript = [{"start": 0.0, "end": duration, "text": "(no speech detected)"}]
@@ -100,10 +76,6 @@ def transcribe_audio(audio_path, _api_key, duration):
 
 
 def analyze_segments(transcript, duration, api_key):
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
     lines = "\n".join(
         f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}"
         for s in transcript
@@ -130,8 +102,19 @@ def analyze_segments(transcript, duration, api_key):
         f"The last segment MUST end at exactly {duration:.1f}"
     )
 
-    resp = model.generate_content(prompt)
-    text = resp.text.strip()
+    resp = requests.post(
+        f"{GROQ_BASE}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"].strip()
+
     if text.startswith("```"):
         parts = text.split("```")
         text = parts[1] if len(parts) > 1 else text
@@ -145,8 +128,7 @@ def analyze_segments(transcript, duration, api_key):
     merged = [segments[0]]
     for seg in segments[1:]:
         last = merged[-1]
-        seg_dur = seg["end"] - seg["start"]
-        if seg_dur < 3.0:
+        if seg["end"] - seg["start"] < 3.0:
             last["end"] = seg["end"]
         else:
             merged.append(seg)
@@ -155,12 +137,7 @@ def analyze_segments(transcript, duration, api_key):
 
 def search_pexels_video(keyword):
     headers = {"Authorization": PEXELS_API_KEY}
-    params = {
-        "query": keyword,
-        "orientation": "portrait",
-        "per_page": 10,
-        "size": "medium",
-    }
+    params = {"query": keyword, "orientation": "portrait", "per_page": 10, "size": "medium"}
     resp = requests.get(
         "https://api.pexels.com/videos/search",
         headers=headers, params=params, timeout=30
@@ -171,10 +148,8 @@ def search_pexels_video(keyword):
         return None
 
     for video in videos:
-        for vf in sorted(
-            video.get("video_files", []),
-            key=lambda x: x.get("height", 0), reverse=True
-        ):
+        for vf in sorted(video.get("video_files", []),
+                         key=lambda x: x.get("height", 0), reverse=True):
             if vf.get("width", 9999) < vf.get("height", 0):
                 return vf["link"]
 
@@ -226,10 +201,10 @@ def process_video(video_path, job_id, api_key, progress_cb):
     audio_path = f"{work}/audio.mp3"
     extract_audio(video_path, audio_path)
 
-    progress_cb(15, "Transcribing audio (first run downloads Whisper model ~75 MB)…")
+    progress_cb(15, "Transcribing with Groq Whisper…")
     transcript = transcribe_audio(audio_path, api_key, duration)
 
-    progress_cb(40, "Planning b-roll segments with Gemini…")
+    progress_cb(40, "Planning b-roll segments with Groq LLaMA…")
     segments = analyze_segments(transcript, duration, api_key)
 
     with open(f"{work}/edit_plan.json", "w") as _f:
