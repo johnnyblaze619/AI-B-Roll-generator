@@ -159,7 +159,10 @@ def analyze_segments(transcript, duration, api_key):
     if segments:
         segments[-1]["end"] = duration
 
-    # Hard guarantee: CTA face cam must be at least 5s
+    # Hard guarantee: last segment must be face_cam and at least 5s
+    if segments and segments[-1]["type"] != "face_cam":
+        segments.append({"start": duration - 7.0, "end": duration, "type": "face_cam"})
+        segments[-2]["end"] = duration - 7.0
     if segments and segments[-1]["type"] == "face_cam":
         cta_dur = segments[-1]["end"] - segments[-1]["start"]
         if cta_dur < 5.0 and len(segments) >= 2:
@@ -223,7 +226,8 @@ def cut_face_cam(original, start, dur, out, w, h):
     run_ffmpeg(
         "-ss", str(start), "-i", original,
         "-t", str(dur),
-        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        "-vf", f"setpts=PTS-STARTPTS,"
+               f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
         "-r", "30",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
@@ -235,7 +239,8 @@ def cut_broll(broll_path, dur, out, w, h):
     run_ffmpeg(
         "-stream_loop", "-1", "-i", broll_path,
         "-t", str(dur),
-        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+        "-vf", f"setpts=PTS-STARTPTS,"
+               f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                f"crop={w}:{h}",
         "-r", "30",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
