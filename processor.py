@@ -393,6 +393,7 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
             "-stream_loop", "-1", "-i", clip,
             "-t", str(part_dur),
             "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
+            "-r", "30",
             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             part_out, error_label=f"bottom part {i}"
         )
@@ -417,6 +418,7 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         "-i", video_path,
         "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
                f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
+        "-r", "30",
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         top_track, error_label="top track"
     )
