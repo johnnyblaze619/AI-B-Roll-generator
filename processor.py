@@ -60,8 +60,11 @@ def transcribe_audio(audio_path, _api_key, duration):
     """Transcribe using OpenAI Whisper (open-source, no API key needed).
     Whisper gives accurate word-level timestamps; Claude handles editorial analysis."""
     from faster_whisper import WhisperModel
+    import os
 
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    cache_dir = os.environ.get("HF_HOME", None)
+    model = WhisperModel("base", device="cpu", compute_type="int8",
+                         download_root=cache_dir)
     segments_iter, _ = model.transcribe(
         audio_path,
         beam_size=5,
