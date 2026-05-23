@@ -199,7 +199,8 @@ def cut_face_cam(original, start, dur, out, w, h):
         "-t", str(dur),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
-        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-threads", "1",
         out, error_label="face-cam cut"
     )
 
@@ -210,7 +211,8 @@ def cut_broll(broll_path, dur, out, w, h):
         "-t", str(dur),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                f"crop={w}:{h}",
-        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-threads", "1",
         out, error_label="b-roll cut"
     )
 
@@ -351,7 +353,8 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
             "-stream_loop", "-1", "-i", clip,
             "-t", str(part_dur),
             "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=increase,crop={width}:{h2}",
-            "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-threads", "1",
             part_out, error_label=f"bottom part {i}"
         )
         bottom_parts.append(part_out)
@@ -375,7 +378,8 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         "-i", video_path,
         "-vf", f"scale={width}:{h2}:force_original_aspect_ratio=decrease,"
                f"pad={width}:{h2}:(ow-iw)/2:(oh-ih)/2:black",
-        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-threads", "1",
         top_track, error_label="top track"
     )
 
@@ -392,7 +396,8 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
         "-filter_complex", "[0:v][1:v]vstack=inputs=2[out]",
         "-map", "[out]",
         "-map", "2:a:0",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-threads", "1",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         output, error_label="split screen composite"
