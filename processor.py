@@ -463,18 +463,26 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
     )
 
     progress_cb(92, "Compositing final video…")
-    output = f"{work}/output.mp4"
+    # Step 1: vstack top + bottom into a video-only file (no audio)
+    video_only = f"{work}/video_only.mp4"
     run_ffmpeg(
         "-i", top_track,
         "-i", bottom_track,
-        "-i", video_path,
         "-filter_complex", "[0:v][1:v]vstack=inputs=2[out]",
         "-map", "[out]",
-        "-map", "2:a:0",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "192k",
+        video_only, error_label="vstack"
+    )
+
+    # Step 2: mux original audio with -c:v copy (no re-encode = no encoder delay = perfect sync)
+    output = f"{work}/output.mp4"
+    run_ffmpeg(
+        "-i", video_only,
+        "-i", video_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-shortest",
-        output, error_label="split screen composite"
+        output, error_label="mux audio"
     )
 
     progress_cb(100, "Done!")
