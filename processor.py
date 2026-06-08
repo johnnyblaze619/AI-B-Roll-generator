@@ -125,33 +125,41 @@ def analyze_segments(transcript, duration, api_key):
         for s in transcript
     )
 
-    n_broll = 4 if duration >= 120 else 3
+    # Proportional rhythm — scales to any video length automatically
+    n_broll = max(1, round(duration / 30))
+    hook_dur = round(max(3.0, min(10.0, duration * 0.15)), 1)
+    cta_dur  = round(max(5.0, min(12.0, duration * 0.15)), 1)
+    cut_dur  = round(max(3.0, min(6.0,  duration * 0.10)), 1)
+    n_cuts   = n_broll - 1
+    remaining = max(n_broll * 5.0, duration - hook_dur - cta_dur - cut_dur * n_cuts)
+    broll_dur = round(remaining / n_broll, 1)
+
+    # Build a scaled example timeline for the LLM
+    t = 0.0
+    ex = [f"  0-{hook_dur:.1f}s   face_cam  ← hook"]
+    t = hook_dur
+    for i in range(n_broll):
+        ex.append(f"  {t:.1f}-{t+broll_dur:.1f}s  broll")
+        t += broll_dur
+        if i < n_cuts:
+            ex.append(f"  {t:.1f}-{t+cut_dur:.1f}s  face_cam  ← cutback")
+            t += cut_dur
+    ex.append(f"  {t:.1f}-{duration:.1f}s  face_cam  ← CTA")
+    example = "\n".join(ex)
 
     prompt = (
         "You are a professional video editor creating a beautiful, balanced short-form edit.\n\n"
         f"TRANSCRIPT ({duration:.0f}s):\n{lines}\n\n"
-        f"Create exactly {n_broll} b-roll segments using this EXACT rhythm:\n"
-        "  1. face_cam — HOOK: cover the first 1-2 sentences (6-10s)\n"
-        f"  2. Alternate {n_broll} times: broll (12-20s) then face_cam (4-6s)\n"
-        "  3. The LAST face_cam is the CTA — MUST be 5-10s, covering the final 1-2 sentences\n\n"
-        f"EXAMPLE for a {duration:.0f}s video with {n_broll} b-roll segments:\n"
-        "  0-8s    face_cam  ← hook, first sentence\n"
-        "  8-25s   broll\n"
-        "  25-30s  face_cam  ← 5s cutback\n"
-        "  30-47s  broll\n"
-        "  47-52s  face_cam  ← 5s cutback\n"
-        "  52-69s  broll\n"
-        f"  69-{duration:.0f}s  face_cam  ← CTA, MINIMUM 5s, last sentence(s)\n\n"
-        "Return ONLY valid JSON, no markdown, no keywords:\n"
-        '[\n'
-        '  {"start": 0.0, "end": 8.0, "type": "face_cam"},\n'
-        '  {"start": 8.0, "end": 25.0, "type": "broll"},\n'
-        '  {"start": 25.0, "end": 30.0, "type": "face_cam"},\n'
-        '  ...\n'
-        f'  {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}\n'
-        "]\n"
-        f"RULES: exactly {n_broll} broll entries. "
-        f"First and last segments are face_cam. Last face_cam is 5-10s. Last ends at {duration:.1f}."
+        f"Create exactly {n_broll} b-roll segment(s) using this EXACT rhythm:\n"
+        "  1. face_cam — HOOK: first 1-2 sentences\n"
+        f"  2. Alternate {n_broll} time(s): broll then face_cam cutback\n"
+        "  3. LAST segment is face_cam CTA — at least 5s, final sentence(s)\n\n"
+        f"EXAMPLE for this {duration:.0f}s video:\n{example}\n\n"
+        "Return ONLY valid JSON array, no markdown:\n"
+        f'[{{"start": 0.0, "end": {hook_dur:.1f}, "type": "face_cam"}}, ...,'
+        f' {{"start": X.X, "end": {duration:.1f}, "type": "face_cam"}}]\n\n'
+        f"RULES: exactly {n_broll} broll entr{'y' if n_broll==1 else 'ies'}. "
+        f"First and last are face_cam. Last face_cam >= 5s. Last ends at {duration:.1f}."
     )
 
     text = _groq_llm(prompt, api_key)
@@ -165,9 +173,9 @@ def analyze_segments(transcript, duration, api_key):
         segments.append({"start": duration - 7.0, "end": duration, "type": "face_cam"})
         segments[-2]["end"] = duration - 7.0
     if segments and segments[-1]["type"] == "face_cam":
-        cta_dur = segments[-1]["end"] - segments[-1]["start"]
-        if cta_dur < 5.0 and len(segments) >= 2:
-            deficit = 5.0 - cta_dur
+        cta_actual = segments[-1]["end"] - segments[-1]["start"]
+        if cta_actual < 5.0 and len(segments) >= 2:
+            deficit = 5.0 - cta_actual
             segments[-2]["end"] -= deficit
             segments[-1]["start"] -= deficit
 
@@ -248,6 +256,21 @@ def cut_broll(broll_path, dur, out, w, h):
         "-frames:v", str(round(dur * 30)),
         "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         out, error_label="b-roll cut"
+    )
+
+
+def cut_broll_from_source(broll_path, source_start, dur, out, w, h):
+    """Cut from a specific position in a user-supplied b-roll file."""
+    run_ffmpeg(
+        "-stream_loop", "-1",
+        "-ss", str(source_start), "-i", broll_path,
+        "-vf", f"setpts=PTS-STARTPTS,"
+               f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+               f"crop={w}:{h}",
+        "-r", "30",
+        "-frames:v", str(round(dur * 30)),
+        "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        out, error_label="custom b-roll cut"
     )
 
 
@@ -475,6 +498,78 @@ def process_video_split_screen(video_path, job_id, api_key, progress_cb):
     )
 
     # Step 2: mux original audio with -c:v copy (no re-encode = no encoder delay = perfect sync)
+    output = f"{work}/output.mp4"
+    run_ffmpeg(
+        "-i", video_only,
+        "-i", video_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        output, error_label="mux audio"
+    )
+
+    progress_cb(100, "Done!")
+    return output
+
+
+def process_video_custom(video_path, broll_path, job_id, api_key, progress_cb):
+    """Custom Edit mode: user supplies both talking head and their own b-roll."""
+    work = f"jobs/{job_id}"
+    os.makedirs(work, exist_ok=True)
+
+    progress_cb(3, "Reading video info…")
+    width, height, duration = get_video_info(video_path)
+    width, height = _cap_resolution(width, height)
+    _, _, broll_duration = get_video_info(broll_path)
+
+    progress_cb(8, "Extracting audio…")
+    audio_path = f"{work}/audio.mp3"
+    extract_audio(video_path, audio_path)
+
+    progress_cb(15, "Transcribing with Groq Whisper…")
+    transcript = transcribe_audio(audio_path, api_key, duration)
+
+    progress_cb(40, "Planning edit with Groq LLaMA…")
+    segments = analyze_segments(transcript, duration, api_key)
+
+    with open(f"{work}/edit_plan.json", "w") as _f:
+        json.dump(segments, _f)
+
+    seg_files = []
+    n_segs = len(segments)
+    broll_offset = 0.0  # advances through the user's b-roll so each slot uses fresh footage
+
+    for i, seg in enumerate(segments):
+        dur = seg["end"] - seg["start"]
+        out = f"{work}/seg_{i:03d}.mp4"
+        pct = 50 + int((i / n_segs) * 37)
+
+        if seg["type"] == "face_cam":
+            progress_cb(pct, f"Face cam {i + 1}/{n_segs} ({dur:.0f}s)…")
+            cut_face_cam(video_path, seg["start"], dur, out, width, height)
+        else:
+            progress_cb(pct, f"Cutting your b-roll ({dur:.0f}s)…")
+            # Modulo keeps start within the source file; stream_loop handles overflow
+            safe_start = broll_offset % broll_duration if broll_duration > 0 else 0.0
+            cut_broll_from_source(broll_path, safe_start, dur, out, width, height)
+            broll_offset += dur
+
+        seg_files.append(out)
+
+    progress_cb(89, "Joining clips…")
+    concat_txt = f"{work}/concat.txt"
+    with open(concat_txt, "w") as f:
+        for sp in seg_files:
+            f.write(f"file '{os.path.abspath(sp)}'\n")
+
+    video_only = f"{work}/video_only.mp4"
+    run_ffmpeg(
+        "-f", "concat", "-safe", "0", "-i", concat_txt,
+        "-c:v", "copy",
+        video_only, error_label="concat"
+    )
+
+    progress_cb(95, "Adding original audio…")
     output = f"{work}/output.mp4"
     run_ffmpeg(
         "-i", video_only,

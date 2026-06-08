@@ -39,6 +39,14 @@ def process():
     upload_path = f"uploads/{job_id}.mp4"
     video.save(upload_path)
 
+    broll_upload_path = None
+    if mode == "custom":
+        broll = request.files.get("broll")
+        if not broll:
+            return jsonify({"error": "Custom Edit requires a b-roll video upload"}), 400
+        broll_upload_path = f"uploads/{job_id}_broll.mp4"
+        broll.save(broll_upload_path)
+
     jobs[job_id] = {
         "progress": 0,
         "message": "Queued…",
@@ -58,6 +66,9 @@ def process():
             if mode == "split":
                 from processor import process_video_split_screen
                 output = process_video_split_screen(upload_path, job_id, api_key, progress_cb)
+            elif mode == "custom":
+                from processor import process_video_custom
+                output = process_video_custom(upload_path, broll_upload_path, job_id, api_key, progress_cb)
             else:
                 from processor import process_video
                 output = process_video(upload_path, job_id, api_key, progress_cb)

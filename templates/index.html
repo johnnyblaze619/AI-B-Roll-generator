@@ -60,7 +60,7 @@
 
     .mode-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 0.75rem;
       margin-bottom: 1.4rem;
     }
@@ -206,21 +206,36 @@
     <button class="mode-card active" id="mode-mix" onclick="selectMode('mix')">
       <div class="mode-icon">🎬</div>
       <div class="mode-title">Mix Edit</div>
-      <div class="mode-desc">Face cam + b-roll alternating throughout</div>
+      <div class="mode-desc">Face cam + Pexels b-roll alternating</div>
     </button>
     <button class="mode-card" id="mode-split" onclick="selectMode('split')">
       <div class="mode-icon">▧</div>
       <div class="mode-title">Split Screen</div>
-      <div class="mode-desc">Face on top, b-roll below &mdash; full video</div>
+      <div class="mode-desc">Face on top, b-roll below</div>
+    </button>
+    <button class="mode-card" id="mode-custom" onclick="selectMode('custom')">
+      <div class="mode-icon">✂️</div>
+      <div class="mode-title">Custom Edit</div>
+      <div class="mode-desc">Upload your own b-roll footage</div>
     </button>
   </div>
 
   <div id="drop-zone">
     <input type="file" id="file-input" accept="video/mp4,video/*" />
     <div class="icon">🎬</div>
-    <p><strong>Drop your MP4 here</strong></p>
+    <p><strong>Drop your talking-head MP4 here</strong></p>
     <p>or click to browse</p>
     <div id="file-name"></div>
+  </div>
+
+  <div id="broll-upload" style="display:none; margin-top:0.9rem;">
+    <div id="broll-drop-zone" style="border:2px dashed var(--border);border-radius:14px;padding:1.4rem 1.5rem;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;position:relative;">
+      <input type="file" id="broll-input" accept="video/mp4,video/*" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;" />
+      <div style="font-size:1.8rem;margin-bottom:0.4rem;">🎥</div>
+      <p style="color:var(--muted);font-size:0.9rem;"><strong style="color:var(--text)">Drop your b-roll MP4 here</strong></p>
+      <p style="color:var(--muted);font-size:0.82rem;">or click to browse</p>
+      <div id="broll-file-name" style="margin-top:0.4rem;font-size:0.82rem;color:var(--accent2);font-weight:500;min-height:1.1rem;"></div>
+    </div>
   </div>
 
   {% if has_env_key %}
@@ -278,8 +293,12 @@ const segList   = document.getElementById('seg-list');
 const resultSection = document.getElementById('result-section');
 const dlBtn     = document.getElementById('dl-btn');
 const errorBox  = document.getElementById('error-box');
+const brollUpload   = document.getElementById('broll-upload');
+const brollDropZone = document.getElementById('broll-drop-zone');
+const brollInput    = document.getElementById('broll-input');
 
 let selectedFile = null;
+let selectedBrollFile = null;
 let pollTimer = null;
 let selectedMode = 'mix';
 
@@ -287,6 +306,23 @@ function selectMode(mode) {
   selectedMode = mode;
   document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
   document.getElementById('mode-' + mode).classList.add('active');
+  brollUpload.style.display = mode === 'custom' ? 'block' : 'none';
+  updateGoBtn();
+}
+
+function updateGoBtn() {
+  const hasMain  = !!selectedFile;
+  const hasBroll = selectedMode !== 'custom' || !!selectedBrollFile;
+  if (hasMain && hasBroll) {
+    goBtn.disabled = false;
+    goBtn.textContent = 'Generate B-Roll Edit ✨';
+  } else if (hasMain && selectedMode === 'custom') {
+    goBtn.disabled = true;
+    goBtn.textContent = 'Now add your b-roll ↑';
+  } else {
+    goBtn.disabled = true;
+    goBtn.textContent = 'Choose a video to start';
+  }
 }
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -297,16 +333,28 @@ dropZone.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0];
   if (f) setFile(f);
 });
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
 
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) setFile(fileInput.files[0]);
+brollDropZone.addEventListener('dragover', e => { e.preventDefault(); brollDropZone.style.borderColor = 'var(--accent2)'; });
+brollDropZone.addEventListener('dragleave', () => { brollDropZone.style.borderColor = 'var(--border)'; });
+brollDropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  brollDropZone.style.borderColor = 'var(--border)';
+  const f = e.dataTransfer.files[0];
+  if (f) setBrollFile(f);
 });
+brollInput.addEventListener('change', () => { if (brollInput.files[0]) setBrollFile(brollInput.files[0]); });
 
 function setFile(f) {
   selectedFile = f;
   fileName.textContent = f.name + '  (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
-  goBtn.disabled = false;
-  goBtn.textContent = 'Generate B-Roll Edit ✨';
+  updateGoBtn();
+}
+
+function setBrollFile(f) {
+  selectedBrollFile = f;
+  document.getElementById('broll-file-name').textContent = f.name + '  (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+  updateGoBtn();
 }
 
 goBtn.addEventListener('click', startJob);
@@ -363,6 +411,7 @@ async function startJob() {
   form.append('video', selectedFile);
   form.append('mode', selectedMode);
   if (apiKey) form.append('api_key', apiKey);
+  if (selectedMode === 'custom' && selectedBrollFile) form.append('broll', selectedBrollFile);
 
   let res;
   try {
@@ -441,7 +490,7 @@ async function loadHistory() {
     if (!completed.length) return;
     list.innerHTML = '';
     completed.forEach(job => {
-      const modeLabel = job.mode === 'split' ? 'Split Screen' : 'Mix Edit';
+      const modeLabel = job.mode === 'split' ? 'Split Screen' : job.mode === 'custom' ? 'Custom Edit' : 'Mix Edit';
       const el = document.createElement('div');
       el.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:0.55rem 0.8rem;background:var(--bg);border-radius:8px;font-size:0.82rem;';
       el.innerHTML = `
